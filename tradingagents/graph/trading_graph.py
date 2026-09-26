@@ -49,6 +49,8 @@ class TradingAgentsGraph:
         debug=False,
         config: dict[str, Any] = None,
         callbacks: list | None = None,
+        analyst_factories: dict[str, Any] | None = None,
+        core_factories: dict[str, Any] | None = None,
     ):
         """Initialize the trading agents graph and components.
 
@@ -57,6 +59,10 @@ class TradingAgentsGraph:
             debug: Whether to run in debug mode
             config: Configuration dictionary. If None, uses default config
             callbacks: Optional list of callback handlers (e.g., for tracking LLM/tool stats)
+            analyst_factories: Optional per-slot analyst node factory overrides
+                (see :class:`GraphSetup`); ``None`` keeps stock/crypto behavior.
+            core_factories: Optional role node factory overrides for the shared
+                part of the graph (see :class:`GraphSetup`).
         """
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
@@ -98,6 +104,8 @@ class TradingAgentsGraph:
             self.quick_thinking_llm,
             self.deep_thinking_llm,
             self.conditional_logic,
+            analyst_factories=analyst_factories,
+            core_factories=core_factories,
         )
 
         self.propagator = Propagator(
