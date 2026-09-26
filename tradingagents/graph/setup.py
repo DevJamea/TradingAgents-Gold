@@ -55,11 +55,25 @@ class GraphSetup:
         quick_thinking_llm: Any,
         deep_thinking_llm: Any,
         conditional_logic: ConditionalLogic,
+        analyst_factories: dict[str, Any] | None = None,
+        core_factories: dict[str, Any] | None = None,
     ):
-        """Initialize with required components."""
+        """Initialize with required components.
+
+        ``analyst_factories`` (optional) overrides per-slot analyst node
+        factories, keyed by the analyst slot key (``market`` / ``social`` /
+        ``news`` / ``fundamentals``).  ``core_factories`` (optional) overrides
+        the post-analyst node factories by role (``bull``, ``bear``,
+        ``research_manager``, ``trader``, ``aggressive``, ``conservative``,
+        ``neutral``, ``portfolio_manager``).  Both default to ``None`` (stock /
+        crypto behavior); they exist so asset specializations (e.g. gold) can
+        swap node implementations without forking the graph wiring.
+        """
         self.quick_thinking_llm = quick_thinking_llm
         self.deep_thinking_llm = deep_thinking_llm
         self.conditional_logic = conditional_logic
+        self.analyst_factories = dict(analyst_factories or {})
+        self.core_factories = dict(core_factories or {})
 
     def setup_graph(
         self, selected_analysts=("market", "social", "news", "fundamentals")
@@ -75,27 +89,44 @@ class GraphSetup:
         """
         plan = build_analyst_execution_plan(selected_analysts)
 
-        analyst_factories = {
-            "market": lambda: create_market_analyst(self.quick_thinking_llm),
-            "social": lambda: create_sentiment_analyst(self.quick_thinking_llm),
-            "news": lambda: create_news_analyst(self.quick_thinking_llm),
-            "fundamentals": lambda: create_fundamentals_analyst(self.quick_thinking_llm),
+        # Slot factories: defaults first, so a specialization overrides only
+        # the slots it implements.  Every factory is invoked with the
+        # quick-thinking LLM at node-creation time (defaults ignore it).
+        analyst_factories: dict[str, Any] = {
+            "market": lambda llm: create_market_analyst(llm),
+            "social": lambda llm: create_sentiment_analyst(llm),
+            "news": lambda llm: create_news_analyst(llm),
+            "fundamentals": lambda llm: create_fundamentals_analyst(llm),
         }
+        analyst_factories.update(self.analyst_factories)
 
-        bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
-        bear_researcher_node = create_bear_researcher(self.quick_thinking_llm)
-        research_manager_node = create_research_manager(self.deep_thinking_llm)
-        trader_node = create_trader(self.quick_thinking_llm)
+        # Role factories for the shared part of the graph (debate, managers).
+        core_factories: dict[str, Any] = {
+            "bull": create_bull_researcher,
+            "bear": create_bear_researcher,
+            "research_manager": create_research_manager,
+            "trader": create_trader,
+            "aggressive": create_aggressive_debator,
+            "conservative": create_conservative_debator,
+            "neutral": create_neutral_debator,
+            "portfolio_manager": create_portfolio_manager,
+        }
+        core_factories.update(self.core_factories)
 
-        aggressive_analyst = create_aggressive_debator(self.quick_thinking_llm)
-        neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
-        conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
-        portfolio_manager_node = create_portfolio_manager(self.deep_thinking_llm)
+        bull_researcher_node = core_factories["bull"](self.quick_thinking_llm)
+        bear_researcher_node = core_factories["bear"](self.quick_thinking_llm)
+        research_manager_node = core_factories["research_manager"](self.deep_thinking_llm)
+        trader_node = core_factories["trader"](self.quick_thinking_llm)
+
+        aggressive_analyst = core_factories["aggressive"](self.quick_thinking_llm)
+        neutral_analyst = core_factories["neutral"](self.quick_thinking_llm)
+        conservative_analyst = core_factories["conservative"](self.quick_thinking_llm)
+        portfolio_manager_node = core_factories["portfolio_manager"](self.deep_thinking_llm)
 
         workflow = StateGraph(AgentState)
 
         for spec in plan.specs:
-            workflow.add_node(spec.agent_node, analyst_factories[spec.key]())
+            workflow.add_node(spec.agent_node, analyst_factories[spec.key](self.quick_thinking_llm))
             workflow.add_node(spec.clear_node, create_msg_delete())
             if spec.tools:
                 workflow.add_node(spec.tool_node, ToolNode(list(spec.tools)))
